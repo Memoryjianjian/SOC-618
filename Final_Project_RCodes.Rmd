@@ -1,7 +1,6 @@
 ---
 title: "SOC_618_Final_Project"
 author: "Xingjian"
-date: "2025-04-26"
 output: html_document
 ---
 
