@@ -1,0 +1,380 @@
+---
+title: "SOC_618_Final_Project"
+author: "Xingjian"
+date: "2025-04-26"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(visNetwork)
+library(ggplot2)
+library(ggdendro)
+library(gplots)
+library(RColorBrewer)
+```
+
+```{r}
+# 1. Network constructions：Bipartite
+
+edges = read_csv("https://github.com/Memoryjianjian/SOC-618/raw/refs/heads/main/associations.csv")
+
+# Hosts are from the Host column, Viruses from the Virus column
+hosts = unique(edges$Host)
+viruses = unique(edges$Virus)
+
+# Create a combined node list
+nodes = tibble(
+  name = c(hosts, viruses),
+  type = c(rep(TRUE, length(hosts)), rep(FALSE, length(viruses)))  # TRUE = Host, FALSE = Virus
+)
+
+g = graph_from_data_frame(
+  d = edges %>% select(from = Host, to = Virus), vertices = nodes, directed = FALSE)
+
+V(g)$type = nodes$type[match(V(g)$name, nodes$name)]
+
+cat("Number of nodes:", vcount(g), "\n")
+cat("Number of edges:", ecount(g), "\n")
+cat("Number of hosts:", sum(V(g)$type), "\n")
+cat("Number of viruses:", sum(!V(g)$type), "\n")
+
+head(V(g)$name)
+head(as_data_frame(g, what = "edges"))
+```
+```{r}
+# 1. Network constructions：Bipartite graph
+
+layout_bipartite = create_layout(g, layout = "bipartite")
+
+ggraph(layout_bipartite) +
+  geom_edge_link(alpha = 0.15, color = "gray60") +
+  geom_node_point(aes(shape = factor(type), color = factor(type)), size = 4, alpha = 0.9) +
+  geom_node_text(aes(label = name), size = 2.5, repel = TRUE, vjust = 1.5, check_overlap = TRUE) +
+  scale_shape_manual(values = c(16, 15), labels = c("Virus", "Host")) +
+  scale_color_manual(values = c("firebrick", "steelblue"), labels = c("Virus", "Host")) +
+  theme_void() +
+  labs(title = "Bipartite Host-Virus Network",subtitle = "Hosts (blue squares) and Viruses (red circles)",color = "Node Type",shape = "Node Type")
+```
+
+```{r}
+# 1. Network constructions：Filtered Bipartite Graph
+
+top_hosts = degree(g, v = V(g)[V(g)$type == TRUE]) %>% sort(decreasing = TRUE) %>% head(20) %>% names()
+top_viruses = degree(g, v = V(g)[V(g)$type == FALSE]) %>% sort(decreasing = TRUE) %>% head(20) %>% names()
+
+g_small = induced_subgraph(g, vids = V(g)[name %in% c(top_hosts, top_viruses)])
+
+layout_small = create_layout(g_small, layout = "bipartite")
+
+ggraph(layout_small) +
+  geom_edge_link(alpha = 0.15, color = "gray60") +
+  geom_node_point(aes(shape = factor(type), color = factor(type)), size = 4, alpha = 0.9) +
+  geom_node_text(aes(label = name), size = 2.5, repel = TRUE, vjust = 1.5, check_overlap = TRUE) +
+  scale_shape_manual(values = c(16, 15)) +
+  scale_color_manual(values = c("firebrick", "steelblue")) +
+  theme_void()
+```
+
+
+```{r}
+# 1. Network constructions: Interactive Bipartite Graph!!!! I learned from my Stat course about data visualization
+
+edges_vis = edges %>% rename(from = Host, to = Virus)
+
+g_vis = graph_from_data_frame(edges_vis, directed = FALSE)
+
+node_degree = degree(g_vis)
+
+nodes_vis = tibble(
+  id = names(node_degree),
+  value = node_degree,
+  group = ifelse(id %in% hosts, "Host", "Virus"))
+
+vis1 = visNetwork(nodes_vis, edges_vis) %>%
+  visNodes(scaling = list(min = 10, max = 40)) %>% 
+  visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) %>%
+  visLegend(addNodes = list(
+    list(label = "Host", shape = "dot", color = "yellow"),
+    list(label = "Virus", shape = "dot", color = "steelblue")),
+  useGroups = FALSE) %>%
+  visLayout(randomSeed = 123)  # make layout reproducible
+
+visSave(vis1, file = "Interactive_Bipartite_Graph.html")
+```
+
+
+
+```{r}
+# 2. Basic Projections
+
+host_proj = bipartite_projection(g, which = "true")
+
+virus_proj = bipartite_projection(g, which = "false")
+
+cat("Host-Host Projection:\n")
+cat("Number of hosts:", vcount(host_proj), "\n")
+cat("Number of edges (shared viruses):", ecount(host_proj), "\n")
+cat("Virus-Virus Projection:\n")
+cat("Number of viruses:", vcount(virus_proj), "\n")
+cat("Number of edges (shared hosts):", ecount(virus_proj), "\n")
+
+virus_proj_weighted = bipartite_projection(g, which = "false", multiplicity = TRUE)
+
+E(virus_proj_weighted)$weight 
+```
+```{r}
+# 2. Basic Projections: Hosts
+components_host = components(host_proj)
+host_proj_largest = induced_subgraph(host_proj, vids = which(components_host$membership == which.max(components_host$csize)))
+
+layout_best = layout_with_fr(
+  host_proj_largest,
+  area = 30 * vcount(host_proj_largest)^2,
+  niter = 5000,
+  repulserad = vcount(host_proj_largest)^3)
+
+ggraph(host_proj_largest, layout = "manual", x = layout_best[,1], y = layout_best[,2]) +
+  geom_edge_link(alpha = 0.1, color = "gray70", size = 0.5) +
+  geom_node_point(color = "steelblue", size = 1.5) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 2.5) +
+  theme_void() +
+  labs(title = "Host-Host Projection (Fruchterman-Reingold Best Layout)")
+```
+```{r}
+# 2. Basic Projections: Virus
+components_virus = components(virus_proj)
+virus_proj_largest = induced_subgraph(virus_proj, vids = which(components_virus$membership == which.max(components_virus$csize)))
+
+layout_best_virus = layout_with_fr(virus_proj_largest,area = 30 * vcount(virus_proj_largest)^2,niter = 5000,repulserad = vcount(virus_proj_largest)^3)
+
+ggraph(virus_proj_largest, layout = "manual", x = layout_best_virus[,1], y = layout_best_virus[,2]) +
+  geom_edge_link(alpha = 0.1, color = "gray70") +
+  geom_node_point(color = "firebrick", size = 1) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 2.5) +
+  theme_void() +
+  labs(title = "Virus-Virus Projection (Fruchterman-Reingold Best Layout)")
+```
+```{r}
+# 2. Basic Projections: Virus with DNA/RNA colored and degrees by node size
+
+viruses = read_csv("https://github.com/Memoryjianjian/SOC-618/raw/refs/heads/main/viruses.csv")
+
+components_virus = components(virus_proj)
+virus_proj_largest = induced_subgraph(virus_proj, vids = which(components_virus$membership == which.max(components_virus$csize)))
+
+layout_kk = layout_with_kk(virus_proj_largest)
+
+virus_tbl = as_tbl_graph(virus_proj_largest) %>%
+  mutate(
+    degree = degree(virus_proj_largest),
+    genome_type = viruses$vDNAoRNA[match(name, viruses$vVirusNameCorrected)],
+    genome_type = ifelse(is.na(genome_type), "Unknown", genome_type))
+
+ggraph(virus_tbl, layout = "manual", x = layout_kk[,1], y = layout_kk[,2]) +
+  geom_edge_link(alpha = 0.1, color = "gray80") +
+  geom_node_point(aes(size = degree, color = genome_type), alpha = 0.6) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 1.6) +
+  scale_size(range = c(1, 5)) +
+  scale_color_manual(values = c("RNA" = "firebrick", "DNA" = "steelblue", "Unknown" = "gray50")) +
+  theme_void() +
+  labs(
+    title = "Virus-Virus Network: Size by Degree, Color by Genome Type",
+    subtitle = "Red = RNA viruses, Blue = DNA viruses",
+    color = "Genome Type",
+    size = "Degree (Connections)")
+```
+
+```{r}
+# 3. Centrality analysis: Bipartite
+
+degree_bipartite = degree(g)
+betweenness_bipartite = betweenness(g)
+pagerank_bipartite = page_rank(g)$vector
+eigenvector_bipartite = eigen_centrality(g)$vector
+
+centrality_bipartite = tibble(
+  node = V(g)$name,
+  type = ifelse(V(g)$type, "Host", "Virus"),
+  degree = degree_bipartite,
+  betweenness = betweenness_bipartite,
+  pagerank = pagerank_bipartite,
+  eigenvector = eigenvector_bipartite)
+
+centrality_bipartite %>% arrange(desc(degree)) %>% head(10)
+```
+
+```{r}
+# 3. Centrality analysis: Bipartite
+
+centrality_bipartite %>%
+  filter(type == "Host") %>%
+  ggplot(aes(x = degree)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "black") +
+  theme_bw() +
+  labs(title = "Degree Distribution of Hosts",
+       x = "Degree (Number of Viruses Infected)",
+       y = "Number of Hosts")
+
+centrality_bipartite %>%
+  filter(type == "Virus") %>%
+  ggplot(aes(x = degree)) +
+  geom_histogram(bins = 30, fill = "firebrick", color = "black") +
+  theme_minimal() +
+  labs(title = "Degree Distribution of Viruses",
+       x = "Degree (Number of Hosts Infected)",
+       y = "Number of Viruses")
+```
+
+
+
+```{r}
+virus_proj_weighted = bipartite_projection(g, which = "false", multiplicity = TRUE)
+E(virus_proj_weighted)$weight
+
+edge_weights = E(virus_proj_weighted)$weight
+edge_weights[edge_weights == 0] <- NA
+
+E(virus_proj_weighted)$weight = 1 / edge_weights
+
+dist_matrix_weighted = distances(virus_proj_weighted, weights = E(virus_proj_weighted)$weight)
+dist_matrix_weighted[is.infinite(dist_matrix_weighted)] = max(dist_matrix_weighted[!is.infinite(dist_matrix_weighted)]) * 2
+
+hc_virus_weighted = hclust(as.dist(dist_matrix_weighted), method = "average")
+```
+```{r}
+dend = as.dendrogram(hc_virus_weighted)
+dendro_data = ggdendro::dendro_data(dend)
+
+ggplot() +
+  geom_segment(
+    data = ggdendro::segment(dendro_data),
+    aes(x = x, y = y, xend = xend, yend = yend)) +
+  geom_text(
+    data = ggdendro::label(dendro_data),
+    aes(x = x, y = y, label = label),
+    angle = 90,   
+    hjust = 1,    
+    size = 2.5 
+  theme_minimal() +
+  labs(title = "Weighted Virus-Virus Dendrogram (Customized Labels)",x = "Viruses",y = "Distance (Weighted by Host Sharing)")
+```
+
+
+```{r}
+# Create heatmap
+heatmap.2(as.matrix(dist_matrix_weighted),trace = "none",dendrogram = "both",Colv = as.dendrogram(hc_virus_weighted),Rowv = as.dendrogram(hc_virus_weighted),col = viridis::viridis(100),margins = c(6, 6),key = TRUE,key.title = "Weighted Distance",key.xlab = "Closer = More Shared Hosts",density.info = "none",main = "Weighted Virus-Virus Heatmap", cexRow = 0.4,cexCol = 0.4)
+
+```
+
+```{r}
+core_virus_proj = coreness(virus_proj_weighted)
+
+V(virus_proj_weighted)$core_virus = core_virus_proj
+
+table(core_virus_proj)
+
+plot(virus_proj_weighted, vertex.color = V(virus_proj_weighted)$core_virus, vertex.size = 4,
+  edge.arrow.size = 0.2, main = "Virus-Virus Projection Colored by Core Number")
+
+```
+
+
+```{r}
+edges = read_csv(
+  "https://github.com/Memoryjianjian/SOC-618/raw/refs/heads/main/associations.csv")
+
+hosts = unique(edges$Host)
+viruses = unique(edges$Virus)
+
+nodes = tibble(
+  name = c(hosts, viruses),
+  type = c(rep(TRUE,  length(hosts)), rep(FALSE, length(viruses)))
+  
+g = graph_from_data_frame(d = edges %>% select(from = Host, to = Virus),vertices = nodes,directed = FALSE)
+
+V(g)$type = nodes$type[ match(V(g)$name, nodes$name) ]
+
+bip_louvain = cluster_louvain(g)
+V(g)$community= membership(bip_louvain)
+
+comms = sort(unique(V(g)$community))
+palette = brewer.pal(min(length(comms), 12), "Set3")
+V(g)$color = palette[ match(V(g)$community, comms) ]
+
+set.seed(2025)
+kk_coords = layout_with_kk(g)
+
+plot(g, layout = kk_coords, rescale = TRUE, vertex.size = 2,vertex.color = V(g)$color,vertex.shape = "circle", vertex.label = NA,edge.color = adjustcolor("grey80", alpha.f = 1),edge.width = 0.5,asp = 0,main = "Bipartite KK Layout: Louvain Communities")
+
+legend("topright",legend = paste("Comm", comms),col = palette,pch = 19,pt.cex = 1.5,bty = "n")
+
+```
+
+```{r}
+library(viridis)
+library(gridExtra)
+
+A = as_adjacency_matrix(g, sparse = FALSE)
+host_idx = which(V(g)$type)      
+virus_idx = which(!V(g)$type)      
+
+inc_mat   = A[host_idx, virus_idx]
+rownames(inc_mat) = V(g)$name[host_idx]
+colnames(inc_mat) = V(g)$name[virus_idx]
+
+dist_h = dist(inc_mat, method = "binary")
+dist_v = dist(t(inc_mat),  method = "binary")
+
+hc_h =hclust(dist_h, method = "average")
+hc_v = hclust(dist_v, method = "average")
+
+dend_h = as.dendrogram(hc_h)
+dh_data = ggdendro::dendro_data(dend_h)
+
+p_dend =  ggplot() +
+  geom_segment(data = segment(dh_data),
+               aes(x=x, y=y, xend=xend, yend=yend),
+               color="grey30") +
+  geom_text(data = label(dh_data),
+            aes(x=x, y=y, label=label),
+            angle=90, hjust=1, size=2.5) +
+  theme_minimal() +
+  labs(title="A. Host–Virus Bipartite: Host Dendrogram",
+       x="Hosts", y="Distance (1 − Jaccard)")
+
+heatmap.2(as.matrix(inc_mat),trace = "none",dendrogram = "both",Rowv = as.dendrogram(hc_h),Colv = as.dendrogram(hc_v),col= viridis(100),margins = c(6,6),key = TRUE,key.title = "Presence",key.xlab = "1 = interaction",density.info= "none",main = "B. Host–Virus Bipartite Heatmap",cexRow = 0.4,cexCol = 0.4)
+
+grid.arrange(p_dend, grid::nullGrob(), ncol = 2, widths = c(2,1))
+```
+
+```{r}
+viruses = read_csv("https://github.com/Memoryjianjian/SOC-618/raw/refs/heads/main/viruses.csv")
+
+viruses = viruses %>%
+  mutate(vEnvelope = tolower(trimws(vEnvelope)))
+
+components_virus = components(virus_proj)
+virus_proj_largest = induced_subgraph(virus_proj, vids = which(components_virus$membership == which.max(components_virus$csize)))
+
+layout_kk= layout_with_kk(virus_proj_largest)
+
+virus_tbl = as_tbl_graph(virus_proj_largest) %>%
+  mutate(
+    degree = degree(virus_proj_largest),
+    envelope_status = viruses$vEnvelope[match(name, viruses$vVirusNameCorrected)],
+    envelope_status = ifelse(is.na(envelope_status), "unknown", envelope_status))
+
+ggraph(virus_tbl, layout = "manual", x = layout_kk[,1], y = layout_kk[,2]) +
+  geom_edge_link(alpha = 0.1, color = "gray80") +
+  geom_node_point(aes(size = degree, color = envelope_status), alpha = 0.6) +
+  geom_node_text(aes(label = name), repel = TRUE, size = 1.6) +
+  scale_size(range = c(1, 5)) +
+  scale_color_manual(values = c("enveloped" = "forestgreen", "non-enveloped" = "goldenrod", "unknown" = "gray50")) +
+  theme_void() +
+  labs(title = "Virus-Virus Network: Size by Degree, Color by Envelope Status", subtitle = "Green = Enveloped viruses, Yellow = Non-enveloped viruses", color = "Envelope Status", size = "Degree (Connections)")
+```
+
